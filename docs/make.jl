@@ -6,11 +6,11 @@ DocMeta.setdocmeta!(mintsRobotTeam, :DocTestSetup, :(using mintsRobotTeam); recu
 makedocs(;
     modules=[mintsRobotTeam],
     authors="John Waczak",
-    repo="https://github.com/john-waczak/mintsRobotTeam.jl/blob/{commit}{path}#{line}",
+    repo="https://github.com/mi3nts/mintsRobotTeam.jl/blob/{commit}{path}#{line}",
     sitename="mintsRobotTeam.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://john-waczak.github.io/mintsRobotTeam.jl",
+        canonical="https://mi3nts.github.io/mintsRobotTeam.jl",
         assets=String[],
     ),
     pages=[
@@ -19,6 +19,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/john-waczak/mintsRobotTeam.jl",
+    repo="github.com/mi3nts/mintsRobotTeam.jl",
     devbranch="main",
 )

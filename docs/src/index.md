@@ -4,7 +4,7 @@ CurrentModule = mintsRobotTeam
 
 # mintsRobotTeam
 
-Documentation for [mintsRobotTeam](https://github.com/john-waczak/mintsRobotTeam.jl).
+Documentation for [mintsRobotTeam](https://github.com/mi3nts/mintsRobotTeam.jl).
 
 ```@index
 ```

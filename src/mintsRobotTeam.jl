@@ -1,5 +1,566 @@
 module mintsRobotTeam
 
-# Write your package code here.
+
+using ProgressMeter
+using Plots
+using georectification
+using mintsOtter
+using DataFrames, CSV
+using Dates
+
+include("config.jl")
+
+export getBilFiles
+export getRawFileList
+export processBilFile
+export beenGeorectified
+export batch_georectify
+export processBoatFiles
+export processAllBoatFiles
+
+"""
+    getBilFiles(dir, file_id)
+
+Get a list of all .bil files in `dir` whose filename matches `file_id`. Returned list is sorted by the capture number at end of filename string.
+"""
+function getBilFiles(dir::String, file_id::String)
+    bils = []
+    for (root, dirs, files) ∈ walkdir(dir)
+        for file ∈ files
+            ffull = joinpath(root, file)
+            namebase = split(split(ffull, "/")[end-1], "-")[1]
+
+            if endswith(file, ".bil") && file_id == namebase
+                push!(bils, joinpath(root, file))
+            end
+        end
+    end
+
+    # get list of file numbers to produce sorting indices
+
+    endings = [split(f, "_")[end] for f ∈ bils]
+    number = [lpad(split(f, "-")[1], 2, "0") for f ∈ endings]
+
+    idx = sortperm(number)
+
+    return bils[idx]
+end
+
+
+
+
+"""
+    getRawFileList(bilpath)
+
+Given a bil path, return the full list of paths to files needed for georectification.
+"""
+function getRawFileList(bilpath::String)
+    basepath = "/"*joinpath(split(bilpath, "/")[1:end-1]...)
+    bilhdrpath = ""
+    timespath = ""
+    specpath = ""
+    spechdrpath = ""
+    lcfpath = ""
+
+    for f ∈ readdir(basepath)
+        if endswith(f, ".bil.hdr")
+            bilhdrpath = joinpath(basepath, f)
+        elseif endswith(f, ".lcf")
+            lcfpath = joinpath(basepath, f)
+        elseif endswith(f, ".times")
+            timespath = joinpath(basepath, f)
+        elseif endswith(f, ".spec")
+            specpath = joinpath(basepath, f)
+        elseif endswith(f, ".spec.hdr")
+            spechdrpath = joinpath(basepath, f)
+        else
+            continue
+        end
+    end
+
+    return bilhdrpath, timespath, specpath, spechdrpath, lcfpath
+end
+
+
+
+
+
+
+"""
+function processBilFile(bilpath::String,
+                        calibrationpath::String,
+                        λs::Array{Float64},
+                        z_g::Float64,
+                        θ::Float64,
+                        isFlipped::Bool,
+                        ndigits::Int,
+                        outpath::String,
+                        file_id::String;
+                        compress=true
+                        )
+
+For a specified bil path, perform georectification and save the output.
+"""
+function processBilFile(bilpath::String,
+                        calibrationpath::String,
+                        λs::Array{Float64},
+                        z_g::Float64,
+                        θ::Float64,
+                        isFlipped::Bool,
+                        ndigits::Int,
+                        outpath::String,
+                        file_id::String;
+                        compress=true
+                        )
+    # 1. get neccesary files
+    base = split(bilpath, "/")[end-1]
+    date = split(bilpath, "/")[end-2]
+
+    bilhdrpath, timespath, specpath, spechdrpath, lcfpath = getRawFileList(bilpath)
+
+    # 2. georectify
+    df = georectify(bilpath,
+                    bilhdrpath,
+                    timespath,
+                    specpath,
+                    spechdrpath,
+                    calibrationpath,
+                    lcfpath,
+                    λs,
+                    z_g,
+                    θ,
+                    isFlipped,
+                    ndigits,
+                    )
+
+    println("\tCleaning up memory")
+    # 3.clean up memory
+    GC.gc()
+    ccall(:malloc_trim, Cvoid, (Cint,), 0)
+    GC.gc()
+
+    println("\tConverting to float")
+    # 4. Convert to float
+    for col ∈ eachcol(df[!, Not([:utc_times])])
+        col = 1.0 .* col
+    end
+
+    # convert datetime to string
+    format = "yyyy-mm-dd HH:MM:SS.sss"
+    df.utc_times = Dates.format.(df.utc_times, format)
+
+    # # create output
+    if !isdir(joinpath(outpath, date, file_id))
+        mkdir(joinpath(outpath, date, file_id))
+    end
+
+
+    println("\tSaving", joinpath(outpath, date, base*".csv"))
+
+
+    if compress
+        # we can compress the files too!
+        CSV.write(joinpath(outpath, date, file_id, base*".csv"), df, compress=true)
+    else
+        CSV.write(joinpath(outpath, date, file_id, base*".csv"), df)
+    end
+
+    println("\tSuccess!")
+    return df
+end
+
+
+
+
+
+"""
+    beenGeorectified(bilpath::STring, outpath::String)
+
+Check whether an HSI has already been georectified.
+"""
+function beenGeorectified(bilpath::String, outpath::String, file_id::String)
+    base = split(bilpath, "/")[end-1]
+    date = split(bilpath, "/")[end-2]
+
+    if isfile(joinpath(outpath, date, file_id, base*".csv"))
+        return true
+    else
+        return false
+    end
+end
+
+
+
+
+
+"""
+    function batch_georectify(basepath::String, outpath::String, file_ids=Vector{String})
+
+Georectify all .bil files within `basepath` that match `file_ids`. Processed files are then saved to `outpath`.
+"""
+function batch_georectify(basepath::String, outpath::String, file_ids=Vector{String})
+    for file_id ∈ file_ids
+        println("Working on $(file_id)")
+        bilfiles = getBilFiles(basepath, file_id)
+        @showprogress for bilfile ∈ bilfiles
+            if !beenGeorectified(bilfile, outpath, file_id)
+                try
+                    processBilFile(
+                        bilfile,
+                        "../calibration",
+                        wavelengths,
+                        location_data["scotty"]["z"],
+                        θ_view,
+                        true,
+                        6,
+                        outpath,
+                        file_id;
+                        compress = false,
+                    )
+                catch e
+                    println(e)
+                end
+            end
+        end
+    end
+end
+
+
+
+
+
+
+"""
+    processBoatFiles(basepath::String, outpath::String)
+
+Give a `basepath` find all boat files and generate CSVs, saving them to `outpath`.
+"""
+function processBoatFiles(basepath::String, outpath::String)
+    for (root, dirs, files) in walkdir(basepath)
+        @showprogress for file in files
+            if !(occursin("fixed", file))
+                if occursin("AirMar", file)
+                    println(file)
+                    name = split(file, "_")[2]
+                    airmar_gps, airmar_speed = importAirMar(joinpath(root, file))
+                    CSV.write(joinpath(outpath, name*"_airmar_gps.csv"), airmar_gps)
+                    CSV.write(joinpath(outpath, name*"_airmar_speed.csv"), airmar_speed)
+                elseif occursin("COM1", file)
+                    println(file)
+                    name = split(file, "_")[2]
+                    COM1 = importCOM1(joinpath(root, file))
+                    CSV.write(joinpath(outpath, name*"_COM1.csv"), COM1)
+
+                elseif occursin("COM2", file)
+                    println(file)
+                    name = split(file, "_")[2]
+                    COM2 = importCOM2(joinpath(root, file))
+                    CSV.write(joinpath(outpath, name*"_COM2.csv"), COM2)
+
+                elseif occursin("COM3", file)
+                    println(file)
+                    name = split(file, "_")[2]
+                    COM3 = importCOM3(joinpath(root, file))
+                    CSV.write(joinpath(outpath, name*"_COM3.csv"), COM3)
+
+                elseif occursin("LISST", file)
+                    println(file)
+                    name = split(file, "_")[2]
+                    LISST = importLISST(joinpath(root, file))
+                    CSV.write(joinpath(outpath, name*"_LISST.csv"), LISST)
+
+                elseif occursin("nmea", file) || occursin("NMEA", file)
+                    println(file)
+                    name = split(file, "_")[2]
+                    nmea = importNMEA(joinpath(root, file))
+                    CSV.write(joinpath(outpath, name*"_nmea.csv"), nmea)
+                elseif occursin("nmea", file)
+                    println(file)
+                end
+            end
+        end
+    end
+end
+
+
+
+
+"""
+    processAllBoatFiles(paths::Array{String}, outpath::String, dates::Array{String})
+
+For each path in `paths`, generate csv's from boat data. Used `dates` to generate output file names.
+"""
+function processAllBoatFiles(paths::Array{String}, outpath::String, dates::Array{String})
+    for i ∈ 1:length(paths)
+        out = joinpath(outpath, dates[i], "boat")
+        if !isdir(out)
+            mkdir(out)
+        end
+
+        try
+            processBoatFiles(paths[i], out)
+        catch e
+            println(e)
+        end
+    end
+end
+
+
+
+# """
+#     makeTarget(basepath::String, locationName::String, ndigits::Int)
+
+# Given a path to boatfiles, `basepath`, generate csv of Target variables within the bounding box for `locationName` and with ilat and ilon set to `ndigits`.
+# """
+# function makeTarget(basepath::String, locationName::String, ndigits::Int)
+#     # collect list of all CSVs for each sensor so we can join them
+#     airmar_gps_dfs = []
+#     airmar_speed_dfs = []
+#     com1_dfs = []
+#     com2_dfs = []
+#     com3_dfs = []
+#     lisst_dfs = []
+#     nmea_dfs = []
+
+#     println("\tCollecting boat files")
+#     @showprogress for f ∈ readdir(basepath)
+#         if endswith(f, "gps.csv")
+#             push!(airmar_gps_dfs, DataFrame(CSV.File(joinpath(basepath, f))))
+#         elseif endswith(f, "speed.csv")
+#             push!(airmar_speed_dfs, DataFrame(CSV.File(joinpath(basepath, f))))
+#         elseif endswith(f, "COM1.csv")
+#             push!(com1_dfs, DataFrame(CSV.File(joinpath(basepath, f))))
+#         elseif endswith(f, "COM2.csv")
+#             push!(com2_dfs, DataFrame(CSV.File(joinpath(basepath, f))))
+#         elseif endswith(f, "COM3.csv")
+#             push!(com3_dfs, DataFrame(CSV.File(joinpath(basepath, f))))
+#         elseif endswith(f, "LISST.csv")
+#             push!(lisst_dfs, DataFrame(CSV.File(joinpath(basepath, f))))
+#         elseif endswith(f, "nmea.csv")
+#             push!(nmea_dfs, DataFrame(CSV.File(joinpath(basepath, f))))
+#         end
+#     end
+
+#     # join df's and sort by utc time
+#     println("\tSorting by utc time")
+#     println("\tairmar_gps_df")
+#     airmar_gps_df = vcat(airmar_gps_dfs...)
+#     sort!(airmar_gps_df, :utc_dt)
+#     unique!(airmar_gps_df)
+
+#     println("\tairmar_speed_df")
+#     airmar_speed_df = vcat(airmar_speed_dfs...)
+#     sort!(airmar_speed_df, :utc_dt)
+#     unique!(airmar_speed_df)
+
+#     println("\tcom1_df")
+#     com1_df = vcat(com1_dfs...)
+#     sort!(com1_df, :utc_dt)
+#     unique!(com1_df)
+
+#     println("\tcom2_df")
+#     com2_df = vcat(com2_dfs...)
+#     sort!(com2_df, :utc_dt)
+#     unique!(com2_df)
+
+#     println("\tcom3_df")
+#     com3_df = vcat(com3_dfs...)
+#     sort!(com3_df, :utc_dt)
+#     unique!(com3_df)
+
+#     println("\tlisst_df")
+#     lisst_df = vcat(lisst_dfs...)
+#     sort!(lisst_df, :utc_dt)
+#     unique!(lisst_df)
+
+#     println("\tnmea_df")
+#     nmea_df = vcat(nmea_dfs...)
+#     sort!(nmea_df, :utc_dt)
+#     nmea_df = unique(nmea_df)
+#     nmea_df = combine(first, groupby(sort(nmea_df, :utc_dt), :utc_dt))
+
+
+#     # bounding box for Scotty's Ranch
+#     println("\tFiltering to within location bounding box")
+#     w = location_data[locationName]["w"]
+#     n = location_data[locationName]["n"]
+#     s = location_data[locationName]["s"]
+#     e = location_data[locationName]["e"]
+
+#     # make sure we're in the correct bounding box
+#     nmea_df = nmea_df[(nmea_df.latitude .> s) .& (nmea_df.latitude .< n) .& (nmea_df.longitude .> w) .& (nmea_df.longitude .< e), :]
+
+#     # filter to times within boat GPS values
+#     tstart = nmea_df.utc_dt[1]
+#     tend = nmea_df.utc_dt[end]
+
+#     # filter df's to those times that fall within Boat GPS times (i.e. nmea)
+#     com1_df_filtered = com1_df[(com1_df.utc_dt .>= tstart) .& (com1_df.utc_dt .<= tend ), :]
+#     com2_df_filtered = com2_df[(com2_df.utc_dt .>= tstart) .& (com2_df.utc_dt .<= tend ), :]
+#     com3_df_filtered = com3_df[(com3_df.utc_dt .>= tstart) .& (com3_df.utc_dt .<= tend ), :]
+#     airmar_speed_df_filtered = airmar_speed_df[(airmar_speed_df.utc_dt .>= tstart) .& (airmar_speed_df.utc_dt .<= tend ), :]
+#     lisst_df_filtered = lisst_df[(lisst_df.utc_dt .>= tstart) .& (lisst_df.utc_dt .<= tend ), :]
+
+#     # now let's interpolate to match the nmea times
+#     println("\tInterpolating to match gps times")
+#     interpolated = Dict()
+
+#     interpolated["longitude"] = nmea_df.longitude
+#     interpolated["latitude"] = nmea_df.latitude
+#     interpolated["unix_dt"] = nmea_df.unix_dt
+#     interpolated["utc_dt"] = nmea_df.utc_dt
+
+
+#     # go through COM1
+#     println("\tInterpolating COM1")
+#     names(com1_df_filtered)
+#     Br_interp = CubicSpline(com1_df_filtered.Br, com1_df_filtered.unix_dt)
+#     interpolated["Br"] = Br_interp.(interpolated["unix_dt"])
+
+#     Ca_interp = CubicSpline(com1_df_filtered.Ca, com1_df_filtered.unix_dt)
+#     interpolated["Ca"] = Ca_interp.(interpolated["unix_dt"])
+
+#     Cl_interp = CubicSpline(com1_df_filtered.Cl, com1_df_filtered.unix_dt)
+#     interpolated["Cl"] = Cl_interp.(interpolated["unix_dt"])
+
+#     HDO_interp = CubicSpline(com1_df_filtered.HDO, com1_df_filtered.unix_dt)
+#     interpolated["HDO"] = HDO_interp.(interpolated["unix_dt"])
+
+#     HDO_percent_interp = CubicSpline(com1_df_filtered.HDO_percent, com1_df_filtered.unix_dt)
+#     interpolated["HDO_percent"] = HDO_percent_interp.(interpolated["unix_dt"])
+
+#     NH4_interp = CubicSpline(com1_df_filtered.NH4, com1_df_filtered.unix_dt)
+#     interpolated["NH4"] = NH4_interp.(interpolated["unix_dt"])
+
+#     NO3_interp = CubicSpline(com1_df_filtered.NO3, com1_df_filtered.unix_dt)
+#     interpolated["NO3"] = NO3_interp.(interpolated["unix_dt"])
+
+#     Na_interp = CubicSpline(com1_df_filtered.Na, com1_df_filtered.unix_dt)
+#     interpolated["Na"] = Na_interp.(interpolated["unix_dt"])
+
+#     Salinity3488_interp = CubicSpline(com1_df_filtered.Salinity3488, com1_df_filtered.unix_dt)
+#     interpolated["Salinity3488"] = Salinity3488_interp.(interpolated["unix_dt"])
+
+#     SpCond_interp = CubicSpline(com1_df_filtered.SpCond, com1_df_filtered.unix_dt)
+#     interpolated["SpCond"] = SpCond_interp.(interpolated["unix_dt"])
+
+#     TDS_interp = CubicSpline(com1_df_filtered.TDS, com1_df_filtered.unix_dt)
+#     interpolated["TDS"] = TDS_interp.(interpolated["unix_dt"])
+
+#     Temp3488_interp = CubicSpline(com1_df_filtered.Temp3488, com1_df_filtered.unix_dt)
+#     interpolated["Temp3488"] = Temp3488_interp.(interpolated["unix_dt"])
+
+#     Turb3488_interp = CubicSpline(com1_df_filtered.Turb3488, com1_df_filtered.unix_dt)
+#     interpolated["Turb3488"] = Turb3488_interp.(interpolated["unix_dt"])
+
+#     pH_interp = CubicSpline(com1_df_filtered.pH, com1_df_filtered.unix_dt)
+#     interpolated["pH"] = pH_interp.(interpolated["unix_dt"])
+
+#     pH_mV_interp = CubicSpline(com1_df_filtered.pH_mV, com1_df_filtered.unix_dt)
+#     interpolated["pH_mV"] = pH_mV_interp.(interpolated["unix_dt"])
+
+
+#     # go through COM2
+#     println("\tInterpolating COM2")
+#     names(com2_df_filtered)
+#     CDOM_interp = CubicSpline(com2_df_filtered.CDOM, com2_df_filtered.unix_dt)
+#     interpolated["CDOM"] = CDOM_interp.(interpolated["unix_dt"])
+
+#     Chl_interp = CubicSpline(com2_df_filtered.Chl, com2_df_filtered.unix_dt)
+#     interpolated["Chl"] = Chl_interp.(interpolated["unix_dt"])
+
+#     ChlRed_interp = CubicSpline(com2_df_filtered.ChlRed, com2_df_filtered.unix_dt)
+#     interpolated["ChlRed"] = ChlRed_interp.(interpolated["unix_dt"])
+
+#     Temp3489_interp = CubicSpline(com2_df_filtered.Temp3489, com2_df_filtered.unix_dt)
+#     interpolated["Temp3489"] = Temp3489_interp.(interpolated["unix_dt"])
+
+#     Turb3489_interp = CubicSpline(com2_df_filtered.Turb3489, com2_df_filtered.unix_dt)
+#     interpolated["Turb3489"] = Turb3489_interp.(interpolated["unix_dt"])
+
+#     bg_interp = CubicSpline(com2_df_filtered.bg, com2_df_filtered.unix_dt)
+#     interpolated["bg"] = bg_interp.(interpolated["unix_dt"])
+
+#     bgm_interp = CubicSpline(com2_df_filtered.bgm, com2_df_filtered.unix_dt)
+#     interpolated["bgm"] = bgm_interp.(interpolated["unix_dt"])
+
+
+#     # go through COM3
+#     println("\tInterpolating COM3")
+#     names(com3_df_filtered)
+#     CO_interp = CubicSpline(com3_df_filtered.CO, com3_df_filtered.unix_dt)
+#     interpolated["CO"] = CO_interp.(interpolated["unix_dt"])
+
+#     OB_interp = CubicSpline(com3_df_filtered.OB, com3_df_filtered.unix_dt)
+#     interpolated["OB"] = OB_interp.(interpolated["unix_dt"])
+
+#     RefFuel_interp = CubicSpline(com3_df_filtered.RefFuel, com3_df_filtered.unix_dt)
+#     interpolated["RefFuel"] = RefFuel_interp.(interpolated["unix_dt"])
+
+#     Salinity3490_interp = CubicSpline(com3_df_filtered.Salinity3490, com3_df_filtered.unix_dt)
+#     interpolated["Salinity3490"] = Salinity3490_interp.(interpolated["unix_dt"])
+
+#     TDS_interp = CubicSpline(com3_df_filtered.TDS, com3_df_filtered.unix_dt)
+#     interpolated["TDS"] = TDS_interp.(interpolated["unix_dt"])
+
+#     TRYP_interp = CubicSpline(com3_df_filtered.TRYP, com3_df_filtered.unix_dt)
+#     interpolated["TRYP"] = TRYP_interp.(interpolated["unix_dt"])
+
+#     Temp3490_interp = CubicSpline(com3_df_filtered.Temp3490, com3_df_filtered.unix_dt)
+#     interpolated["Temp3490"] = Temp3490_interp.(interpolated["unix_dt"])
+
+#     Turb3490_interp = CubicSpline(com3_df_filtered.Turb3490, com3_df_filtered.unix_dt)
+#     interpolated["Turb3490"] = Turb3490_interp.(interpolated["unix_dt"])
+
+
+#     # go through lisst
+#     println("\tInterpolating LISST")
+#     names(lisst_df_filtered)
+#     # cubic spline failing for some reason.
+#     SSC_interp = QuadraticInterpolation(lisst_df_filtered.SSC, lisst_df_filtered.unix_dt)
+#     interpolated["SSC"] = []
+#     for t ∈ interpolated["unix_dt"]
+#         try
+#             push!(interpolated["SSC"], SSC_interp(t))
+#         catch e
+#             push!(interpolated["SSC"], NaN)
+#         end
+#     end
+
+
+#     # generate ilat and ilon
+#     println("\tGenerating ilat and ilon")
+
+#     interpolated["ilat"] = round.(interpolated["latitude"], digits=ndigits)
+#     interpolated["ilon"] = round.(interpolated["longitude"], digits=ndigits)
+
+
+#     println("\tSaving CSV")
+
+#     CSV.write(joinpath(basepath, "Targets.csv"), DataFrame(interpolated))
+# end
+
+
+
+# """
+#     makeTargets(basepaths::Array{String}, locationName::String, ndigits::Int)
+
+# Loop through `basepaths` and makeTarget for each path.
+# """
+# function makeTargets(basepaths::Array{String}, locationName::String, ndigits::Int)
+#     for path ∈ basepaths
+#         println(path)
+#         makeTarget(path, locationName, ndigits)
+#     end
+# end
+
+
+
+
+
+
+
+
+
 
 end

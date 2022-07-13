@@ -3,7 +3,7 @@ using mintsRobotTeam
 using ProgressMeter
 using DataFrames, CSV
 using BenchmarkTools
-
+using georectification
 
 
 include("../config.jl")
@@ -19,13 +19,11 @@ rawPath = "/media/john/HSDATA/raw/"
 
 outpath = "/media/john/HSDATA/processed/"
 
-
 # make individual processed folders
 for path ∈ [joinpath(outpath, date) for date ∈ dates]
     if !isdir(path)
         mkdir(path)
-    end
-end
+    end end
 
 boatpaths = ["/media/john/HSDATA/boat/20201123",
              "/media/john/HSDATA/boat/20201209",
@@ -73,11 +71,10 @@ rawPaths = [joinpath(rawPath, d) for d ∈ dates]
 
 
 
-# file_ids_11_23 = ["Scotty_1",  "Scotty_2", "Scotty_3", "Scotty_4", "Scotty_5"]
-# file_ids_12_09 = ["NoDye_1", "NoDye_2", "Dye_1", "Dye_2"]
-# file_ids_12_10 = ["NoDye_1", "NoDye_2", "Dye_1", "Dye_2"]
-# file_ids_03_24 = ["Demonstration", "Demonstration_long"]
-
+file_ids_11_23 = ["Scotty_1",  "Scotty_2", "Scotty_3", "Scotty_4", "Scotty_5"]
+file_ids_12_09 = ["NoDye_1", "NoDye_2", "Dye_1", "Dye_2"]
+file_ids_12_10 = ["NoDye_1", "NoDye_2", "Dye_1", "Dye_2"]
+file_ids_03_24 = ["Demonstration", "Demonstration_long"]
 
 
 
@@ -97,50 +94,82 @@ rawPaths = [joinpath(rawPath, d) for d ∈ dates]
 # processAllBoatFiles(boatpaths, outpath, dates)
 
 
+# outboatpaths = [joinpath(outpath, d, "boat") for d ∈ dates]
+# isdir(boatpaths[1])
+
+# makeTargets(outboatpaths, "scotty", 6)
+
+
+processedpaths = [joinpath(outpath, d) for d ∈ dates]
+
+
+imagepath = "/media/john/HSDATA/raw"
+dates
+flightsDict = Dict("11-23" => ("Scotty_1",
+                               "Scotty_2",
+                               "Scotty_3",
+                               "Scotty_4",
+                               "Scotty_5",
+                               ),
+                   "12-09" => ("NoDye_1",
+                               "NoDye_2",
+                               "Dye_1",
+                               "Dye_2",
+                               ),
+                   "12-10" => ("NoDye_1",
+                               "NoDye_2",
+                               "Dye_1",
+                               "Dye_2",
+                               ),
+                   "03-24" => ("Demonstration",
+                               "Demonstration_long"
+                               ))
+
+master_lcfs = Dict()
+for d ∈ dates
+    dfs =[]
+    for name ∈ flightsDict[d]
+        lcf_df = masterLCF(joinpath(imagepath, d), name)
+        push!(dfs, lcf_df)
+    end
+    master_lcfs[d] = vcat(dfs...)
+end
+
+master_lcfs
+
+names(master_lcfs["11-23"])
+
+# generate category labels
+for d ∈ dates
+    categories!(master_lcfs[d])
+end
+
+
+cats = categorySummaries(master_lcfs["11-23"])
+nrow(cats)
+
+# loop through the dates and update the Targets.csv files
+@showprogress for d ∈ dates
+    cats = categorySummaries(master_lcfs[d])
+    boatpath = joinpath(outpath, d, "boat", "Targets.csv")
+    boat_categories!(boatpath, cats)
+    predye_postdye!(boatpath, d)
+end
 
 
 
+data_dirs = [joinpath(outpath, d) for d ∈ dates]
+
+test_hsi_df = CSV.File(joinpath(outpath, "11-23", "Scotty_1", "Scotty_1-1.csv")) |> DataFrame
+names(test_hsi_df)
+ignore_cols = ["longitude", "latitude", "utc_times", "ilat", "ilon", "pixeltimes"]
+data_cols = [n for n ∈ names(test_hsi_df) if !(n∈ignore_cols)]
+"pixeltimes" ∈ data_cols
 
 
-
-
-
-
-
-
-
-
-# function main()
-#     # # 1. georectify HSIs
-#     # batch_georectify(dates, rawPath, outpath)
-
-#     # # 2. collect boat CSVs
-#     # processAllBoatFiles(boatpaths, dates)
-
-
-#     outpath = "/home/john/gitRepos/mintsRobotTeam/influxdb/data"
-#     for path ∈ [joinpath(outpath, date) for date ∈ dates]
-#         if !isdir(path)
-#             mkdir(path)
-#         end
-#     end
-
-#     dates = ["03-23",
-#              "03-24",
-#              ]
-
-#     boatpaths = ["/home/john/gitRepos/mintsRobotTeam/influxdb/data/20220323",
-#                  "/home/john/gitRepos/mintsRobotTeam/influxdb/data/20220324",
-#                  ]
-
-#     # 2. collect boat CSVs
-#     processAllBoatFiles(boatpaths, dates)
-
-
-# end
-
-
-
-
+combineTargetsAndFeatures(joinpath(outpath, "11-23"), file_ids_11_23);
+combineTargetsAndFeatures(joinpath(outpath, "12-09"), file_ids_12_09);
+combineTargetsAndFeatures(joinpath(outpath, "12-10"), file_ids_12_10);
+combineTargetsAndFeatures(joinpath(outpath, "03-24"), file_ids_03_24);
 
 

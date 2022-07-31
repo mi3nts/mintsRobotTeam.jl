@@ -79,32 +79,30 @@ file_ids_03_24 = ["Demonstration", "Demonstration_long"]
 
 
 
-# batch_georectify(rawPaths[1], outpath, file_ids_11_23)
-# batch_georectify(rawPaths[2], outpath, file_ids_12_09)
-# batch_georectify(rawPaths[3], outpath, file_ids_12_10)
-# batch_georectify(rawPaths[4], outpath, file_ids_03_24)
+batch_georectify(rawPaths[1], outpath, file_ids_11_23)
+batch_georectify(rawPaths[2], outpath, file_ids_12_09)
+batch_georectify(rawPaths[3], outpath, file_ids_12_10)
+batch_georectify(rawPaths[4], outpath, file_ids_03_24)
 
 
 
 # processBoatFiles(boatpaths[1], outpath)
 
+processAllBoatFiles(boatpaths, outpath, dates)
 
 
+outboatpaths = [joinpath(outpath, d, "boat") for d ∈ dates]
+isdir(boatpaths[1])
 
-# processAllBoatFiles(boatpaths, outpath, dates)
 
-
-# outboatpaths = [joinpath(outpath, d, "boat") for d ∈ dates]
-# isdir(boatpaths[1])
-
-# makeTargets(outboatpaths, "scotty", 6)
+makeTargets(outboatpaths, "scotty", 6)
 
 
 processedpaths = [joinpath(outpath, d) for d ∈ dates]
 
 
 imagepath = "/media/john/HSDATA/raw"
-dates
+# dates
 flightsDict = Dict("11-23" => ("Scotty_1",
                                "Scotty_2",
                                "Scotty_3",

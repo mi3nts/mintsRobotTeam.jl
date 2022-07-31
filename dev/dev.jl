@@ -79,10 +79,15 @@ file_ids_03_24 = ["Demonstration", "Demonstration_long"]
 
 
 
-batch_georectify(rawPaths[1], outpath, file_ids_11_23)
-batch_georectify(rawPaths[2], outpath, file_ids_12_09)
-batch_georectify(rawPaths[3], outpath, file_ids_12_10)
-batch_georectify(rawPaths[4], outpath, file_ids_03_24)
+# batch_georectify(rawPaths[1], outpath, file_ids_11_23)
+# batch_georectify(rawPaths[2], outpath, file_ids_12_09)
+# batch_georectify(rawPaths[3], outpath, file_ids_12_10)
+# batch_georectify(rawPaths[4], outpath, file_ids_03_24)
+
+batch_georectify_redo(rawPaths[1], outpath, file_ids_11_23)
+batch_georectify_redo(rawPaths[2], outpath, file_ids_12_09)
+batch_georectify_redo(rawPaths[3], outpath, file_ids_12_10)
+batch_georectify_redo(rawPaths[4], outpath, file_ids_03_24)
 
 
 

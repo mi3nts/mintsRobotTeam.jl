@@ -17,6 +17,7 @@ export getRawFileList
 export processBilFile
 export beenGeorectified
 export batch_georectify
+export batch_georectify_redo
 export processBoatFiles
 export processAllBoatFiles
 export makeTarget
@@ -231,6 +232,38 @@ function batch_georectify(basepath::String, outpath::String, file_ids=Vector{Str
                 catch e
                     println(e)
                 end
+            end
+        end
+    end
+end
+
+
+
+"""
+    function batch_georectify_redo(basepath::String, outpath::String, file_ids=Vector{String})
+
+Georectify all .bil files within `basepath` that match `file_ids`. Processed files are then saved to `outpath`.
+"""
+function batch_georectify_redo(basepath::String, outpath::String, file_ids=Vector{String})
+    for file_id ∈ file_ids
+        println("Working on $(file_id)")
+        bilfiles = getBilFiles(basepath, file_id)
+        @showprogress for bilfile ∈ bilfiles
+            try
+                processBilFile(
+                    bilfile,
+                    "../calibration",
+                    wavelengths,
+                    location_data["scotty"]["z"],
+                    θ_view,
+                    true,
+                    6,
+                    outpath,
+                    file_id;
+                    compress = false,
+                )
+            catch e
+                println(e)
             end
         end
     end
@@ -566,7 +599,12 @@ Loop through `basepaths` and makeTarget for each path.
 function makeTargets(basepaths::Array{String}, locationName::String, ndigits::Int)
     for path ∈ basepaths
         println("Making targets for $(path)")
-        makeTarget(path, locationName, ndigits)
+        try
+            makeTarget(path, locationName, ndigits)
+        catch e
+            println(e)
+        end
+
     end
 end
 
